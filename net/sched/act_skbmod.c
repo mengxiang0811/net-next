@@ -16,6 +16,9 @@
 #include <linux/rtnetlink.h>
 #include <net/netlink.h>
 #include <net/pkt_sched.h>
+#include <net/ip.h>
+#include <net/ipv6.h>
+#include <net/dsfield.h>
 
 #include <linux/tc_act/tc_skbmod.h>
 #include <net/tc_act/tc_skbmod.h>
@@ -72,6 +75,25 @@ static int tcf_skbmod_run(struct sk_buff *skb, const struct tc_action *a,
 		ether_addr_copy(eth_hdr(skb)->h_source, (u8 *)tmpaddr);
 	}
 
+	if (flags & SKBMOD_F_INHERITDSFIELD) {
+		int wlen = skb_network_offset(skb);
+		switch (tc_skb_protocol(skb)) {
+		case htons(ETH_P_IP):
+			wlen += sizeof(struct iphdr);
+			if (!pskb_may_pull(skb, wlen))
+				return TC_ACT_SHOT;
+			skb->priority = ipv4_get_dsfield(ip_hdr(skb)) >> 2;
+			break;
+
+		case htons(ETH_P_IPV6):
+			wlen += sizeof(struct ipv6hdr);
+			if (!pskb_may_pull(skb, wlen))
+				return TC_ACT_SHOT;
+			skb->priority = ipv6_get_dsfield(ipv6_hdr(skb)) >> 2;
+			break;
+		}
+	}
+
 	return action;
 }
 
@@ -126,6 +148,9 @@ static int tcf_skbmod_init(struct net *net, struct nlattr *nla,
 	parm = nla_data(tb[TCA_SKBMOD_PARMS]);
 	if (parm->flags & SKBMOD_F_SWAPMAC)
 		lflags = SKBMOD_F_SWAPMAC;
+
+	if (parm->flags & SKBMOD_F_INHERITDSFIELD)
+		lflags |= SKBMOD_F_INHERITDSFIELD;
 
 	exists = tcf_idr_check(tn, parm->index, a, bind);
 	if (exists && bind)
